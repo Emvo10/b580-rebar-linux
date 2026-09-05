@@ -88,7 +88,8 @@ driver_name() {
 
 check_shared_root_safety() {
   local root_port="$1"
-  local root_path="/sys/bus/pci/devices/$root_port"
+  local root_path
+  root_path=$(readlink -f "/sys/bus/pci/devices/$root_port")
   local path bdf class vendor device unsafe=0
 
   [[ -e "$root_path" ]] || { err "Root port $root_port is not present in sysfs"; return 1; }
@@ -119,7 +120,8 @@ check_shared_root_safety() {
 
 find_audio_under_root() {
   local root_port="$1"
-  local root_path="/sys/bus/pci/devices/$root_port"
+  local root_path
+  root_path=$(readlink -f "/sys/bus/pci/devices/$root_port")
   local path vendor device
   while IFS= read -r path; do
     [[ -r "$path/vendor" && -r "$path/device" ]] || continue
