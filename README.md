@@ -1,5 +1,20 @@
 # Intel Arc B580 ReBAR workaround for Linux
 
+
+## Download
+
+Latest release:
+https://github.com/Emvo10/b580-rebar-linux/releases/latest
+
+## Why this matters
+
+Without ReBAR, the Intel Arc B580 can lose around 30% of gaming performance on average in affected benchmark sets, while some games lose substantially more.
+
+This workaround can replace a 256 MB BAR with a 16 GB BAR aperture on compatible systems, allowing the Intel xe driver to expose essentially all usable VRAM as CPU-accessible memory.
+
+Performance gains vary by game, CPU, platform, and driver version.
+
+
 A small Linux userspace workaround that can turn an Intel Arc B580 from a **256 MB BAR** into a **16 GB BAR aperture**, allowing the `xe` driver to expose essentially all usable VRAM as CPU-accessible memory on compatible older systems.
 
 It does **not** flash or modify the BIOS/VBIOS.
