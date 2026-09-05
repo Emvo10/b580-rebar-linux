@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+set -u
+
+# Intel Arc B580 Linux ReBAR userspace workaround
+# Target GPU: Intel Arc B580 (8086:e20b), 12 GB VRAM, 16 GB BAR aperture.
+
+GPU_ID="8086:e20b"
+AUDIO_ID="8086:e2f7"
+TARGET_SIZE_TEXT="16GB"
+TARGET_REGION_TEXT="size=16G"
+TARGET_SIZE_FIELD=14
+
+log() { printf '[b580-rebar] %s\n' "$*"; }
+err() { printf '[b580-rebar] ERROR: %s\n' "$*" >&2; }
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || { err "Missing command: $1"; return 1; }
+}
+
+load_config() {
+  # Optional advanced overrides:
+  #   B580_GPU=0000:67:00.0
+  #   B580_ROOT_PORT=0000:64:00.0
+  if [[ -r /etc/default/b580-rebar ]]; then
+    # shellcheck disable=SC1091
+    . /etc/default/b580-rebar
+  fi
+}
+
+find_gpu() {
+  if [[ -n "${B580_GPU:-}" ]]; then
+    printf '%s\n' "$B580_GPU"
+    return 0
+  fi
+
+  mapfile -t GPUS < <(lspci -D -d "$GPU_ID" | awk '{print $1}')
+  if (( ${#GPUS[@]} == 0 )); then
+    err "Intel Arc B580 ($GPU_ID) not found"
+    return 1
+  fi
+  if (( ${#GPUS[@]} > 1 )); then
+    err "More than one B580 found. Set B580_GPU in /etc/default/b580-rebar."
+    printf 'Detected: %s\n' "${GPUS[*]}" >&2
+    return 1
+  fi
+  printf '%s\n' "${GPUS[0]}"
+}
+
+find_root_port() {
+  local gpu="$1"
+  if [[ -n "${B580_ROOT_PORT:-}" ]]; then
+    printf '%s\n' "$B580_ROOT_PORT"
+    return 0
+  fi
+
+  local dev parent
+  dev=$(readlink -f "/sys/bus/pci/devices/$gpu") || return 1
+  parent=$(dirname "$dev")
+
+  while :; do
+    case "$(basename "$parent")" in
+      pci0000:*) break ;;
+      /|.) err "Could not determine upstream PCI root port"; return 1 ;;
+    esac
+    dev="$parent"
+    parent=$(dirname "$dev")
+  done
+
+  basename "$dev"
+}
+
+bar_is_16g() {
+  local gpu="$1"
+  lspci -vv -s "$gpu" 2>/dev/null | grep -q "Region 2:.*${TARGET_REGION_TEXT}"
+}
+
+supports_16g() {
+  local gpu="$1"
+  lspci -vv -s "$gpu" 2>/dev/null | grep -A2 -i 'Physical Resizable BAR' | grep -q 'supported:.*16GB'
+}
+
+driver_name() {
+  local gpu="$1"
+  if [[ -L "/sys/bus/pci/devices/$gpu/driver" ]]; then
+    basename "$(readlink -f "/sys/bus/pci/devices/$gpu/driver")"
+  fi
+}
+
+check_shared_root_safety() {
+  local root_port="$1"
+  local root_path="/sys/bus/pci/devices/$root_port"
+  local path bdf class vendor device unsafe=0
+
+  [[ -e "$root_path" ]] || { err "Root port $root_port is not present in sysfs"; return 1; }
+
+  while IFS= read -r path; do
+    bdf=$(basename "$path")
+    [[ "$bdf" == "$root_port" ]] && continue
+    [[ -r "$path/class" && -r "$path/vendor" && -r "$path/device" ]] || continue
+
+    class=$(<"$path/class")
+    vendor=$(<"$path/vendor")
+    device=$(<"$path/device")
+
+    # PCI-to-PCI bridges are expected inside the path.
+    [[ "$class" == 0x0604* ]] && continue
+
+    # Allow only the B580 itself and its Intel HDMI/DP audio endpoint.
+    if [[ "$vendor:$device" == "0x8086:0xe20b" || "$vendor:$device" == "0x8086:0xe2f7" ]]; then
+      continue
+    fi
+
+    err "Refusing to remove shared root port $root_port: unrelated endpoint $bdf ($vendor:$device class $class) is below it."
+    unsafe=1
+  done < <(find "$root_path" -mindepth 1 -type d -name '????:??:??.?' 2>/dev/null)
+
+  (( unsafe == 0 ))
+}
+
+find_audio_under_root() {
+  local root_port="$1"
+  local root_path="/sys/bus/pci/devices/$root_port"
+  local path vendor device
+  while IFS= read -r path; do
+    [[ -r "$path/vendor" && -r "$path/device" ]] || continue
+    vendor=$(<"$path/vendor")
+    device=$(<"$path/device")
+    if [[ "$vendor:$device" == "0x8086:0xe2f7" ]]; then
+      basename "$path"
+    fi
+  done < <(find "$root_path" -mindepth 1 -type d -name '????:??:??.?' 2>/dev/null)
+}
+
+show_status() {
+  load_config
+  need_cmd lspci || return 1
+  local gpu drv
+  gpu=$(find_gpu) || return 1
+  drv=$(driver_name "$gpu")
+
+  echo "GPU: $gpu"
+  echo "Driver: ${drv:-unbound}"
+  lspci -vv -s "$gpu" | grep -E 'Region 2|Physical Resizable BAR|BAR 2:' -A1 || true
+
+  if bar_is_16g "$gpu"; then
+    echo "Result: ReBAR 16 GB ACTIVE"
+    return 0
+  fi
+  echo "Result: ReBAR 16 GB NOT active"
+  return 1
+}
+
+apply_workaround() {
+  [[ $EUID -eq 0 ]] || { err "Run --apply as root"; return 1; }
+  load_config
+
+  for c in lspci setpci readlink find awk grep modprobe; do
+    need_cmd "$c" || return 1
+  done
+
+  if ! grep -qw 'pci=realloc' /proc/cmdline; then
+    err "Kernel parameter pci=realloc is not active. Add it, reboot, then try again."
+    return 1
+  fi
+
+  local gpu root_port old new gpu2 drv
+  local -a audio_devices=()
+
+  gpu=$(find_gpu) || return 1
+  log "GPU=$gpu"
+
+  if bar_is_16g "$gpu"; then
+    log "16 GB BAR is already active; nothing to do"
+    return 0
+  fi
+
+  if ! supports_16g "$gpu"; then
+    err "This B580 does not report 16 GB as a supported ReBAR size"
+    return 1
+  fi
+
+  root_port=$(find_root_port "$gpu") || return 1
+  log "ROOT_PORT=$root_port"
+
+  check_shared_root_safety "$root_port" || return 1
+
+  mapfile -t audio_devices < <(find_audio_under_root "$root_port")
+  if (( ${#audio_devices[@]} )); then
+    log "AUDIO=${audio_devices[*]}"
+  else
+    log "AUDIO=none detected"
+  fi
+
+  # Release the GPU/audio if coldplug already bound them.
+  if [[ -e "/sys/bus/pci/drivers/xe/$gpu" ]]; then
+    echo "$gpu" > /sys/bus/pci/drivers/xe/unbind
+  fi
+  local audio
+  for audio in "${audio_devices[@]}"; do
+    if [[ -e "/sys/bus/pci/drivers/snd_hda_intel/$audio" ]]; then
+      echo "$audio" > /sys/bus/pci/drivers/snd_hda_intel/unbind || true
+    fi
+  done
+
+  # Disable PCI decoding while changing BAR sizing.
+  setpci -s "$gpu" COMMAND=0000
+
+  old=$(setpci -s "$gpu" ECAP_REBAR+0x08.l) || { err "Could not read ReBAR control register"; return 1; }
+  new=$(printf '%08x' $(( (0x$old & 0xFFFFE0FF) | (TARGET_SIZE_FIELD << 8) )))
+  log "ReBAR control: $old -> $new"
+
+  setpci -s "$gpu" ECAP_REBAR+0x08.l="$new" || { err "Could not write ReBAR control register"; return 1; }
+
+  # Re-lay bridge resources and re-enumerate the branch.
+  echo 1 > "/sys/bus/pci/devices/$root_port/remove" || { err "Could not remove root port $root_port"; return 1; }
+  sleep 1
+  echo 1 > /sys/bus/pci/rescan
+
+  gpu2=""
+  for _ in {1..15}; do
+    gpu2=$(lspci -D -d "$GPU_ID" | awk 'NR==1 {print $1}')
+    [[ -n "$gpu2" ]] && break
+    sleep 1
+  done
+
+  if [[ -z "$gpu2" ]]; then
+    err "B580 did not return after PCI rescan. A reboot may be required."
+    return 1
+  fi
+
+  log "GPU_AFTER_RESCAN=$gpu2"
+
+  modprobe xe 2>/dev/null || true
+  sleep 1
+  if [[ ! -L "/sys/bus/pci/devices/$gpu2/driver" && -e /sys/bus/pci/drivers/xe/bind ]]; then
+    echo "$gpu2" > /sys/bus/pci/drivers/xe/bind 2>/dev/null || true
+  fi
+
+  for _ in {1..10}; do
+    drv=$(driver_name "$gpu2")
+    [[ "$drv" == xe ]] && break
+    sleep 1
+  done
+
+  if bar_is_16g "$gpu2"; then
+    log "SUCCESS: Intel Arc B580 is using a 16 GB BAR"
+    lspci -vv -s "$gpu2" | grep -E 'Region 2|Physical Resizable BAR|BAR 2:' -A1 || true
+    return 0
+  fi
+
+  err "B580 returned, but 16 GB BAR was not allocated"
+  return 1
+}
+
+case "${1:---check}" in
+  --check|check) show_status ;;
+  --apply|apply) apply_workaround ;;
+  *)
+    echo "Usage: $0 [--check|--apply]"
+    exit 2
+    ;;
+esac

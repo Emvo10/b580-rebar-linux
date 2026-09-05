@@ -1,0 +1,15 @@
+[Unit]
+Description=Intel Arc B580 16GB ReBAR workaround
+ConditionKernelCommandLine=pci=realloc
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=display-manager.service graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/b580-rebar --apply
+TimeoutStartSec=45
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
