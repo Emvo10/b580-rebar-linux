@@ -4,6 +4,35 @@ A small Linux userspace workaround that can turn an Intel Arc B580 from a **256 
 
 It does **not** flash or modify the BIOS/VBIOS.
 
+## Quick start — Bazzite
+
+If you use **Bazzite** and have an Intel Arc B580, you do not need to find PCI addresses or edit the script manually.
+
+```bash
+git clone https://github.com/Emvo10/b580-rebar-linux.git
+cd b580-rebar-linux
+sudo ./install.sh
+systemctl reboot
+```
+
+The installer detects Bazzite/rpm-ostree systems and automatically adds `pci=realloc` if it is missing. It then installs and enables the boot service.
+
+After reboot, verify:
+
+```bash
+sudo b580-rebar --check
+```
+
+Expected result:
+
+```text
+Result: ReBAR 16 GB ACTIVE
+```
+
+You can also verify it in **LACT**. A successful B580 setup should show **Resizable BAR: Enabled** and roughly **12 GB CPU Accessible VRAM** on the 12 GB model.
+
+If the installer cannot safely handle the machine automatically, it stops instead of guessing. See the detailed instructions and recovery section below.
+
 ## Confirmed working
 
 Tested successfully on:
@@ -59,6 +88,10 @@ cat /proc/cmdline
 If `pci=realloc` is already present, continue to installation.
 
 ### Bazzite / rpm-ostree systems
+
+The recommended Bazzite path is the **Quick start** above: `install.sh` adds `pci=realloc` automatically when it is missing.
+
+To add it manually instead:
 
 ```bash
 sudo rpm-ostree kargs --append-if-missing="pci=realloc"
