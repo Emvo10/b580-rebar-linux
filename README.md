@@ -286,3 +286,223 @@ https://gist.github.com/andersevenrud/eec93e9151117bc0d6b6133b40eaffa5
 ## Disclaimer
 
 This writes to PCI configuration space and temporarily removes/re-enumerates a PCIe branch. It is much less invasive than flashing modified firmware, but it is still an unsupported workaround. Test carefully and keep a recovery path available.
+
+## Other Linux distributions
+
+This workaround is not Bazzite-specific.
+
+It may also work on other systemd-based Linux distributions if:
+
+- the hardware is compatible
+- the Intel `xe` driver is being used
+- sufficient 64-bit PCI MMIO space is available
+- the kernel is booted with `pci=realloc`
+
+> Currently confirmed working on Lenovo ThinkStation P520 + Intel Arc B580 + Bazzite. Other distributions below are not yet independently confirmed.
+
+### Ubuntu / Debian / Linux Mint / Zorin OS
+
+Install requirements:
+
+```bash
+sudo apt update
+sudo apt install git pciutils
+```
+
+Add `pci=realloc` to your kernel command line in:
+
+```text
+/etc/default/grub
+```
+
+For example:
+
+```text
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash pci=realloc"
+```
+
+Then:
+
+```bash
+sudo update-grub
+sudo reboot
+```
+
+After reboot verify:
+
+```bash
+cat /proc/cmdline
+```
+
+Then install:
+
+```bash
+git clone https://github.com/Emvo10/b580-rebar-linux.git
+cd b580-rebar-linux
+sudo ./install.sh
+sudo systemctl reboot
+```
+
+### Fedora / Nobara
+
+Install requirements:
+
+```bash
+sudo dnf install git pciutils
+```
+
+Add the kernel argument:
+
+```bash
+sudo grubby --update-kernel=ALL --args="pci=realloc"
+sudo reboot
+```
+
+Then install:
+
+```bash
+git clone https://github.com/Emvo10/b580-rebar-linux.git
+cd b580-rebar-linux
+sudo ./install.sh
+sudo systemctl reboot
+```
+
+### Arch Linux / EndeavourOS / CachyOS
+
+Install requirements:
+
+```bash
+sudo pacman -S git pciutils
+```
+
+Add `pci=realloc` to the kernel command line using your bootloader.
+
+For GRUB, add it to `GRUB_CMDLINE_LINUX_DEFAULT` in:
+
+```text
+/etc/default/grub
+```
+
+Then:
+
+```bash
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+sudo reboot
+```
+
+For systemd-boot, add `pci=realloc` to the `options` line of the boot entry.
+
+After reboot verify:
+
+```bash
+cat /proc/cmdline
+```
+
+Then install:
+
+```bash
+git clone https://github.com/Emvo10/b580-rebar-linux.git
+cd b580-rebar-linux
+sudo ./install.sh
+sudo systemctl reboot
+```
+
+### PikaOS
+
+Make sure `pci=realloc` is added to the kernel command line used by your PikaOS installation.
+
+After reboot verify:
+
+```bash
+cat /proc/cmdline
+```
+
+Then install:
+
+```bash
+git clone https://github.com/Emvo10/b580-rebar-linux.git
+cd b580-rebar-linux
+sudo ./install.sh
+sudo systemctl reboot
+```
+
+### Pop!_OS
+
+On installations using kernelstub:
+
+```bash
+sudo kernelstub -a "pci=realloc"
+sudo reboot
+```
+
+After reboot verify:
+
+```bash
+cat /proc/cmdline
+```
+
+Then install:
+
+```bash
+git clone https://github.com/Emvo10/b580-rebar-linux.git
+cd b580-rebar-linux
+sudo ./install.sh
+sudo systemctl reboot
+```
+
+### Verification
+
+After installation and reboot:
+
+```bash
+sudo b580-rebar --check
+```
+
+A successful B580 setup should report:
+
+```text
+Result: ReBAR 16 GB ACTIVE
+```
+
+### Distribution status
+
+**Confirmed:**
+
+- Bazzite — Lenovo ThinkStation P520 + Intel Arc B580
+
+**Expected to work — feedback welcome:**
+
+- Fedora
+- Nobara
+- Ubuntu
+- Debian
+- Linux Mint
+- Zorin OS
+- Arch Linux
+- EndeavourOS
+- CachyOS
+- PikaOS
+- Pop!_OS
+
+Hardware compatibility is more important than the Linux distribution.
+
+## Feedback / tested systems
+
+If you try this workaround on another system, please leave feedback.
+
+Please open a GitHub Issue and include:
+
+- PC / motherboard model
+- Intel Arc GPU model
+- Linux distribution
+- kernel version
+- whether `pci=realloc` was active
+- result of:
+
+```bash
+sudo b580-rebar --check
+```
+
+If it worked on your system, please let me know so I can add your hardware and Linux distribution to the confirmed compatibility list.
+
+Reports from other systems are very welcome, especially older OEM and workstation platforms.
