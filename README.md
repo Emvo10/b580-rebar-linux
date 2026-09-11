@@ -8,7 +8,7 @@ https://github.com/Emvo10/b580-rebar-linux/releases/latest
 
 ## Why this matters
 
-Without ReBAR, the Intel Arc B580 can lose around 30% of gaming performance on average in affected benchmark sets, while some games lose substantially more.
+Without ReBAR, the Intel Arc B580 can lose on gaming performance on average in affected benchmark sets, while some games lose substantially more.
 
 This workaround can replace a 256 MB BAR with a 16 GB BAR aperture on compatible systems, allowing the Intel xe driver to expose essentially all usable VRAM as CPU-accessible memory.
 
